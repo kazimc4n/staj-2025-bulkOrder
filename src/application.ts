@@ -5,7 +5,7 @@ import {
   RestExplorerComponent,
 } from '@loopback/rest-explorer';
 import {RepositoryMixin} from '@loopback/repository';
-import {RestApplication} from '@loopback/rest';
+import {RestApplication, RestBindings} from '@loopback/rest';
 import {ServiceMixin} from '@loopback/service-proxy';
 import path from 'path';
 import {MySequence} from './sequence';
@@ -29,6 +29,10 @@ export class Staj2025Application extends BootMixin(
       path: '/explorer',
     });
     this.component(RestExplorerComponent);
+
+    this.bind(RestBindings.ERROR_WRITER_OPTIONS).to({
+      debug: true,
+    });
 
     this.projectRoot = __dirname;
     // Customize @loopback/boot Booter Conventions here

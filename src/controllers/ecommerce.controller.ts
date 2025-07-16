@@ -1,19 +1,19 @@
 import {
   Count,
   CountSchema,
-  Filter,
   FilterExcludingWhere,
   repository,
-  Where,
+  Where
 } from '@loopback/repository';
 import {
-  post,
-  param,
+  del,
   get,
   getModelSchemaRef,
+  HttpErrors,
+  param,
   patch,
+  post,
   put,
-  del,
   requestBody,
   response,
 } from '@loopback/rest';
@@ -24,11 +24,24 @@ import {
   UsersRepository,
 } from '../repositories';
 
-interface OrderRequest {
+
+// eski hali
+/* interface OrderRequest {
   user_id: number;
   item_id: number;
   count: number;
+} */
+
+//multiple order'a izin veren hali
+interface BulkOrderRequest {
+  user_id: number;
+  items: Array<{
+    item_id: number;
+    count: number;
+  }>;
 }
+
+
 
 export class EcommerceController {
   constructor(
@@ -38,7 +51,7 @@ export class EcommerceController {
     public ordersRepository: OrdersRepository,
     @repository(UsersRepository)
     public usersRepository: UsersRepository,
-  ) {}
+  ) { }
 
   @post('/items')
   @response(200, {
@@ -183,166 +196,94 @@ export class EcommerceController {
 
   @post('/orders')
   @response(200, {
-    description: 'Order created with user and item info',
-    content: {
-      'application/json': {
-        schema: {
-          type: 'object',
-          properties: {
-            order: getModelSchemaRef(Orders),
-            user: getModelSchemaRef(Users),
-            item: getModelSchemaRef(Item),
-          },
-        },
-      },
-    },
+    description: 'Multiple sipariş',
+    content: {'application/json': {schema: getModelSchemaRef(Orders)}},
   })
   async createOrder(
-    @requestBody()
-    order: OrderRequest,
-  ): Promise<{order: Orders; user: Users; item: Item}> {
+    @requestBody({
+      content: {
+        'application/json': {
+          schema: getModelSchemaRef(BulkOrderRequest, {
+            title: 'BulkOrderRequest',
+            exclude: [],
+          }),
+        },
+      },
+    })
+    orderReq: BulkOrderRequest,
+  ): Promise<{
+    user: {id: number; username: string};
+    orders: Array<{
+      id: number;
+      item_id: number;
+      stock_number: number;
+      item_name: string;
+    }>;
+  }> {
+
     // odev
     // item var mı yok mu kontrol ediyoruz
     // user var mı yok mu onu da kontrol edelim
-    const user = await this.usersRepository.findOne({
-      where: {id: order.user_id},
-    });
-    if (!user) {
-      throw new Error('User not found');
-    }
 
-    const item = await this.itemRepository.findOne({
-      where: {id: order.item_id},
-    });
-    if (!item || item.stock < order.count) {
-      throw new Error('Item not available or insufficient stock');
-    }
 
-    item.stock -= order.count;
-    await this.itemRepository.updateById(item.id, item);
-
-    const newOrder = {
-      user_id: order.user_id,
-      item_id: order.item_id,
-      stock_number: order.count,
-    };
-
-    const createdOrder = await this.ordersRepository.create(newOrder);
-
-    // odev
-    // return ederken bana kullanıcı bilgilerini de döndür
-    // item bilgilerini de döndür
-    return {
-      order: createdOrder,
-      user: user,
-      item: item,
-    };
-  }
-
-  // odev
-  // sepete birden fazla ürün eklenebilir
-  @post('/orders/multiple')
-  @response(200, {
-    description: 'Multiple orders created',
-    content: {
-      'application/json': {
-        schema: {
-          type: 'object',
-          properties: {
-            orders: {type: 'array', items: getModelSchemaRef(Orders)},
-            user: getModelSchemaRef(Users),
-            items: {type: 'array', items: getModelSchemaRef(Item)},
-          },
-        },
-      },
-    },
-  })
-  async createMultipleOrders(
-    @requestBody()
-    request: {
-      user_id: number;
-      items: {item_id: number; count: number}[];
-    },
-  ): Promise<{orders: Orders[]; user: Users; items: Item[]}> {
+    // 1) Kullanıcı kontrolü
+    let userInstance: Users;
     try {
-      let user = await this.usersRepository.findOne({
-        where: {id: request.user_id},
-      });
-      if (!user) throw new Error('User not found');
-
-      const orders: Orders[] = [];
-      const items: Item[] = [];
-
-      for (const orderItem of request.items) {
-        const item = await this.itemRepository.findOne({
-          where: {id: orderItem.item_id},
-        });
-
-        if (!item || item.stock < orderItem.count) {
-          throw new Error(
-            `Item ${orderItem.item_id} not available or insufficient stock`,
-          );
-        }
-
-        item.stock -= orderItem.count;
-        await this.itemRepository.updateById(item.id, item);
-
-        const newOrder = await this.ordersRepository.create({
-          user_id: request.user_id,
-          item_id: orderItem.item_id,
-          stock_number: orderItem.count,
-        });
-
-        orders.push(newOrder);
-        items.push(item);
-      }
-
-      return {
-        orders,
-        user,
-        items,
-      };
-    } catch (error) {
-      throw new Error(
-        'Sepete urun ekleme islemi basarisiz oldu. ' + error.message,
+      userInstance = await this.usersRepository.findById(orderReq.user_id);
+    } catch {
+      throw new HttpErrors.NotFound(
+        `User with id=${orderReq.user_id} not found`,
       );
     }
-  }
 
-  // odev
-  // ürünleri isim, fiyat aralığı veya stok durumuna göre filtreleyip listeleyen endpoint
-  @get('/items/filter')
-  @response(200, {
-    description: 'Filtered items',
-    content: {
-      'application/json': {
-        schema: {type: 'array', items: getModelSchemaRef(Item)},
-      },
-    },
-  })
-  async filterItems(
-    @param.query.string('name') name?: string,
-    @param.query.number('minPrice') minPrice?: number,
-    @param.query.number('maxPrice') maxPrice?: number,
-    @param.query.number('minStock') minStock?: number,
-    @param.query.number('maxStock') maxStock?: number,
-  ): Promise<Item[]> {
-    const where: any = {};
+    const createdOrders: Array<{
+      id: number;
+      item_id: number;
+      stock_number: number;
+      item_name: string;
+    }> = [];
 
-    if (name) {
-      where.item_name = {like: `%${name}%`};
-    }
-    if (minPrice !== undefined || maxPrice !== undefined) {
-      where.price = {};
-      if (minPrice !== undefined) where.price.gte = minPrice;
-      if (maxPrice !== undefined) where.price.lte = maxPrice;
-    }
-    if (minStock !== undefined || maxStock !== undefined) {
-      where.stock = {};
-      if (minStock !== undefined) where.stock.gte = minStock;
-      if (maxStock !== undefined) where.stock.lte = maxStock;
+    // 2) Her ürün için stok kontrolü ve sipariş işlemi
+    for (const {item_id, count} of orderReq.items) {
+      // Ürün var mı?
+      let itemInstance: Item;
+      try {
+        itemInstance = await this.itemRepository.findById(item_id);
+      } catch {
+        throw new HttpErrors.NotFound(`Item with id=${item_id} not found`);
+      }
+
+      // Yeterli stok mu?
+      if (itemInstance.stock < count) {
+        throw new HttpErrors.BadRequest(
+          `Insufficient stock for item id=${item_id}: requested ${count}, available ${itemInstance.stock}`,
+        );
+      }
+
+      // Stok güncelle
+      await this.itemRepository.updateById(itemInstance.id, {
+        stock: itemInstance.stock - count,
+      });
+
+      // Sipariş kaydet
+      const newOrder = await this.ordersRepository.create({
+        user_id: userInstance.id,
+        item_id: itemInstance.id,
+        stock_number: count,
+      });
+
+      createdOrders.push({
+        id: newOrder.id!,
+        item_id: itemInstance.id,
+        stock_number: count,
+        item_name: itemInstance.item_name,
+      });
     }
 
-    return this.itemRepository.find({where});
+    // 3) Sonucu dön
+    return {
+      user: {id: userInstance.id!, username: userInstance.username},
+      orders: createdOrders,
+    };
   }
 }
